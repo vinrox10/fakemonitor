@@ -4,33 +4,35 @@ from PIL import Image
 import gradio as gr
 from mss import mss
 
-# 1. Point GUI calls to the virtual framebuffer
-os.environ["DISPLAY"] = ":99"                                  
+# 1. Tell Linux to use the virtual display
+os.environ["DISPLAY"] = ":99"
 
-def screen_html() -> str:
-    """Capture the virtual desktop, encode as base64, and return an <img> tag."""
-    with mss() as sct:                                          
-        screenshot = sct.grab(sct.monitors[1])                 # grab monitor 1 :contentReference[oaicite:4]{index=4}
-    img = Image.fromarray(np.array(screenshot))                
-    buffer = io.BytesIO()                                      
-    img.save(buffer, format="PNG")                             
-    b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return f'<img src="data:image/png;base64,{b64}" ' \
-           f'style="width:100%; height:auto; border:1px solid #333;" />'
+# 2. Screenshot function that returns an <img> HTML tag
+def capture_screen_as_html():
+    with mss() as sct:
+        screenshot = sct.grab(sct.monitors[1])
+        img = Image.fromarray(np.array(screenshot))
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        img_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+        html = f'<img src="data:image/png;base64,{img_b64}" style="width:100%;height:auto;">'
+        return html
 
-def click_center() -> str:
-    """Simulate a click at the center of 1024×768 in the virtual display."""
-    subprocess.run(
-        ["xdotool","mousemove","512","384","click","1"], check=True
-    )                                                          
-    return "Clicked at screen center"
+# 3. Function to simulate clicking the center of the screen
+def click_center():
+    subprocess.run(["xdotool", "mousemove", "512", "384", "click", "1"], check=True)
+    return "Clicked at center"
 
+# 4. Build the Gradio Blocks UI
 with gr.Blocks() as demo:
-    gr.Markdown("## Headless Remote Desktop (Auto‐refresh every 2 s)")  
-    # 2. HTML output that auto‐polls `screen_html` every 2 seconds
-    screen = gr.HTML(screen_html, every=2, label="Live Virtual Desktop") :contentReference[oaicite:5]{index=5}
-    btn   = gr.Button("Click Center")                            
-    btn.click(click_center, None, None)                          
+    gr.Markdown("# Virtual Desktop Remote View")
+    
+    # auto-refreshing screen
+    screen = gr.HTML(capture_screen_as_html, every=2, label="Live Screen")
+    
+    # button to click center
+    click_btn = gr.Button("Click Center")
+    click_btn.click(click_center, outputs=None)
 
-    demo.queue()      # enable background processing                       
+    demo.queue()
     demo.launch(share=True)
