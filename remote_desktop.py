@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
-import os, time, threading, subprocess
+import os
+import time
+import threading
+import subprocess
 from PIL import Image
 import gradio as gr
 from mss import mss
 
-# 1. Point at the virtual display (Xvfb :99 must already be running)
-os.environ["DISPLAY"] = ":99"
+# ──────────────────────────────────────────────────────────────────────────────
+# 1️⃣ ENVIRONMENT SETUP — EVDEV → Xvfb
+# evdev provides /dev/input/event*, Xvfb implements a full X11 server in memory,
+# and xdotool uses XTEST to inject pointer events back into that server.
+os.environ["DISPLAY"] = ":99"  # ensure all X clients/subprocesses target the same Xvfb
 
-# 2. Screenshot loop: save /tmp/latest_screen.png every 2 seconds
+# ──────────────────────────────────────────────────────────────────────────────
+# 2️⃣ SCREENSHOT THREAD — mss → PIL → /tmp/latest_screen.png
+# mss hooks into the X server framebuffer (even under Xvfb), returns BGRA bytes.
+# Converting via Image.frombytes gives us an exact 1024×768 snapshot.
 def save_screenshot():
     with mss() as sct:
-        monitor = sct.monitors[1]
-        sct_img = sct.grab(monitor)
-        img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+        shot = sct.grab(sct.monitors[1])
+        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
         img.save("/tmp/latest_screen.png")
 
 def screenshot_loop():
@@ -22,51 +30,59 @@ def screenshot_loop():
 
 threading.Thread(target=screenshot_loop, daemon=True).start()
 
-# 3. Gradio callbacks + hidden components
+# ──────────────────────────────────────────────────────────────────────────────
+# 3️⃣ CLICK HANDLER & LOGGING — XTEST injection via xdotool
+# We keep an in-memory Python list of logs; each click yields two events:
+# - recv coord string
+# - injected xdotool event
+click_log = []
 
-def load_screenshot_html() -> str:
+def load_screenshot_canvas() -> str:
     """
-    Returns HTML with:
-      1. A fixed-size <img> (1024×768) whose right-click is disabled.
-      2. A transparent <div> overlaid on top to catch all click events.
-      3. JS in that <div> onclick to capture coords, fill coord_input, and click coord_button.
+    Build an HTML <canvas> (1024×768), load the latest screenshot into it,
+    and set up a JS onclick handler that:
+      • computes true Xvfb x,y (no scaling)
+      • writes "x,y" into the hidden coord_input
+      • programmatically clicks coord_button
     """
     path = "/tmp/latest_screen.png"
     if not os.path.exists(path):
         return "<p>No screenshot yet…</p>"
+
     import base64
-    b64 = base64.b64encode(open(path, "rb").read()).decode("utf-8")
+    data = base64.b64encode(open(path, "rb").read()).decode("utf-8")
+
     return f'''
-    <div style="position: relative; width: 1024px; height: 768px;">
-      <!-- The actual screenshot; disable right-click on it -->
-      <img id="screen" src="data:image/png;base64,{b64}"
-           width="1024" height="768"
-           style="border:1px solid #444; image-rendering: pixelated;"
-           oncontextmenu="return false;"
-      />
-      <!-- Transparent overlay catches all clicks -->
-      <div style="
-            position: absolute;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            cursor: crosshair;
-        "
-        onclick="
-           const rect = this.getBoundingClientRect();
-           const x = Math.floor(event.clientX - rect.left);
-           const y = Math.floor(event.clientY - rect.top);
-           document.getElementById('coord_input').value = x+','+y;
-           document.getElementById('coord_button').click();
-        "
-      ></div>
-    </div>
+    <canvas id="screen" width="1024" height="768"
+            style="border:1px solid #444; image-rendering: pixelated;"></canvas>
+    <script>
+    (function() {{
+      const canvas = document.getElementById('screen');
+      const ctx = canvas.getContext('2d');
+      const img = new Image();
+      img.onload = () => ctx.drawImage(img, 0, 0, 1024, 768);
+      img.src = "data:image/png;base64,{data}";
+      canvas.onclick = event => {{
+        const rect = canvas.getBoundingClientRect();
+        const x = Math.floor(event.clientX - rect.left);
+        const y = Math.floor(event.clientY - rect.top);
+        // shuttle back to Python
+        document.getElementById('coord_input').value = x + ',' + y;
+        document.getElementById('coord_button').click();
+      }};
+    }})();
+    </script>
     '''
 
 def on_click_box(coord: str, log_state: list):
     """
-    coord == "x,y" from the hidden textbox.
-    Move & click the Xvfb mouse at those coords, and append to log.
+    coord == "x,y".
+    1. Append recv record
+    2. Parse ints, inject via xdotool
+    3. Append fired record
     """
+    timestamp = time.strftime("%H:%M:%S")
+    log_state.append(f"{timestamp} → recv '{coord}'")
     try:
         x_str, y_str = coord.split(',')
         x, y = int(x_str), int(y_str)
@@ -74,38 +90,40 @@ def on_click_box(coord: str, log_state: list):
             ["xdotool", "mousemove", str(x), str(y), "click", "1"],
             check=True
         )
-        log_state.append(f"{time.strftime('%H:%M:%S')} → Click at ({x}, {y})")
-    except Exception:
-        log_state.append(f"{time.strftime('%H:%M:%S')} → Invalid coord: {coord}")
-    return log_state[-100:]
+        log_state.append(f"{timestamp} → xdotool clicked at ({x},{y})")
+    except Exception as e:
+        log_state.append(f"{timestamp} → error parsing/injecting: {e}")
+    # keep recent 50 entries
+    return log_state[-50:]
 
-# 4. Build & launch Gradio UI
-
+# ──────────────────────────────────────────────────────────────────────────────
+# 4️⃣ GRADIO UI — hidden coord_input/button shuttle, visible canvas & log
 with gr.Blocks() as demo:
     gr.Markdown(
-        "# Headless Remote Desktop with Overlay Click Handler\n\n"
-        "Click anywhere on the panel (even right-click) and see it logged below."
+        "# Headless Xvfb Remote Desktop Viewer  \n"
+        "Click anywhere on the canvas to move & click the virtual mouse.  \n"
+        "Logs appear below."
     )
 
-    # Live-updating HTML with overlay
-    screen_html = gr.HTML(load_screenshot_html, every=2, label="Live Screen")
+    # Live canvas snapshot
+    screen_canvas = gr.HTML(load_screenshot_canvas, every=2, label="Live Screen")
 
-    # Hidden textbox to shuttle "x,y" from JS → Python
+    # Hidden shuttle for coords
     coord_input = gr.Textbox(value="", visible=False, elem_id="coord_input")
 
-    # Visible click log
+    # Visible log box
     click_log_box = gr.Textbox(
+        value="(waiting for clicks…)",
         label="Click Log",
         interactive=False,
-        lines=8,
-        value="(waiting for clicks...)"
+        lines=8
     )
 
-    # Hidden button triggered by JS
+    # Hidden trigger button
     coord_button = gr.Button(visible=False, elem_id="coord_button")
     coord_button.click(
         fn=on_click_box,
-        inputs=[coord_input, gr.State([])],
+        inputs=[coord_input, gr.State(click_log)],
         outputs=click_log_box
     )
 
