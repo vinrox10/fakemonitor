@@ -58,7 +58,7 @@ def click_center() -> str:
 with gr.Blocks() as demo:
     gr.Markdown("# Headless Remote Desktop Viewer")
     # HTML component auto-refreshes every 2 s
-    demo.HTML(load_screenshot_html, every=2, label="Live Screen")  # :contentReference[oaicite:1]{index=1}
+    gr.HTML(load_screenshot_html, every=2, label="Live Screen")  # :contentReference[oaicite:1]{index=1}
     gr.Button("Click Center").click(click_center, outputs=None)
     demo.queue()
     demo.launch(share=True)
