@@ -14,8 +14,8 @@ def save_screenshot():
     with mss() as sct:
         monitor = sct.monitors[1]
         sct_img = sct.grab(monitor)
-        # Correctly convert raw BGRA bytes → RGB Image
-        img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")  # :contentReference[oaicite:0]{index=0}
+        # Convert raw BGRA → RGB
+        img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
         img.save("/tmp/latest_screen.png")
 
 def screenshot_loop():
@@ -23,42 +23,40 @@ def screenshot_loop():
         save_screenshot()
         time.sleep(2)
 
-# Start background thread (daemon so it stops with the main process)
 threading.Thread(target=screenshot_loop, daemon=True).start()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. Gradio functions
 
-def load_screenshot_html() -> str:
-    """
-    Load the last saved screenshot and return
-    an <img> tag with base64-encoded PNG.
-    """
+def get_screenshot_pil():
+    """Return the latest screenshot as a PIL Image (for gr.Image)."""
     path = "/tmp/latest_screen.png"
     if not os.path.exists(path):
-        return "<p>No screenshot yet...</p>"
-    with open(path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
-    return (
-        f'<img src="data:image/png;base64,{b64}" '
-        f'style="width:100%;height:auto;border:1px solid #444;" />'
-    )
+        # Return a blank placeholder if no screenshot yet
+        return Image.new("RGB", (1024, 768), color=(30, 30, 30))
+    return Image.open(path)
 
-def click_center() -> str:
-    """Simulate a mouse click at the center of the 1024×768 screen."""
-    subprocess.run(
-        ["xdotool", "mousemove", "512", "384", "click", "1"],
-        check=True
-    )
-    return "Clicked at center"
+def on_click(evt: gr.SelectData):
+    """
+    evt.index gives (x, y) clicked in the displayed image.
+    We send a mousemove+click to Xvfb at those coords.
+    """
+    click_x, click_y = evt.index
+    # Move + click
+    subprocess.run(["xdotool", "mousemove", str(click_x), str(click_y), "click", "1"])
+    return None  # no value to update
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4. Build & launch Gradio UI
 
 with gr.Blocks() as demo:
     gr.Markdown("# Headless Remote Desktop Viewer")
-    # HTML component auto-refreshes every 2 s
-    gr.HTML(value=load_screenshot_html, every=2, label="Live Screen")  # :contentReference[oaicite:1]{index=1}
-    gr.Button("Click Center").click(click_center, outputs=None)
-    demo.queue()
-    demo.launch(share=True)
+    # Use gr.Image so we can capture clicks
+    screen = gr.Image(
+        value=get_screenshot_pil,
+        every=2,
+        label="Live Screen"
+    )
+    # Bind clicks on the image to our handler
+    screen.select(on_click, inputs=None, outputs=None)
+    demo.launch(server_name="0.0.0.0", share=True)
