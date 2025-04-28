@@ -1,44 +1,64 @@
 #!/usr/bin/env python3
-import os, io, base64, subprocess, time
+import os, io, base64, subprocess, time, threading
+from PIL import Image
 import gradio as gr
 from mss import mss
-from PIL import Image
 
-# 1. Set up environment
+# ──────────────────────────────────────────────────────────────────────────────
+# 1. Point all GUI calls to the virtual display (:99 must already be running)
 os.environ["DISPLAY"] = ":99"
 
-# 2. Screenshot function that saves to file
+# ──────────────────────────────────────────────────────────────────────────────
+# 2. Capture + save a screenshot to disk every 2 seconds
 def save_screenshot():
     with mss() as sct:
         monitor = sct.monitors[1]
         sct_img = sct.grab(monitor)
-        img = Image.fromarray(sct_img.rgb)
-        img.save("/tmp/latest_screen.png")  # Save to tmp folder
-    return
+        # Correctly convert raw BGRA bytes → RGB Image
+        img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")  # :contentReference[oaicite:0]{index=0}
+        img.save("/tmp/latest_screen.png")
 
-# 3. Gradio function that loads the latest screenshot
-def load_screenshot_as_html():
-    if not os.path.exists("/tmp/latest_screen.png"):
-        return "<p>No screenshot available yet.</p>"
-    
-    with open("/tmp/latest_screen.png", "rb") as f:
-        img_b64 = base64.b64encode(f.read()).decode("utf-8")
-        html = f'<img src="data:image/png;base64,{img_b64}" style="width:100%; height:auto;">'
-        return html
-
-# 4. Background task to keep saving screenshots
-def background_screenshot_loop():
+def screenshot_loop():
     while True:
         save_screenshot()
-        time.sleep(2)  # Save every 2 seconds
+        time.sleep(2)
 
-# 5. Start background screenshot loop in a separate thread
-import threading
-threading.Thread(target=background_screenshot_loop, daemon=True).start()
+# Start background thread (daemon so it stops with the main process)
+threading.Thread(target=screenshot_loop, daemon=True).start()
 
-# 6. Build Gradio Interface
+# ──────────────────────────────────────────────────────────────────────────────
+# 3. Gradio functions
+
+def load_screenshot_html() -> str:
+    """
+    Load the last saved screenshot and return
+    an <img> tag with base64-encoded PNG.
+    """
+    path = "/tmp/latest_screen.png"
+    if not os.path.exists(path):
+        return "<p>No screenshot yet...</p>"
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+    return (
+        f'<img src="data:image/png;base64,{b64}" '
+        f'style="width:100%;height:auto;border:1px solid #444;" />'
+    )
+
+def click_center() -> str:
+    """Simulate a mouse click at the center of the 1024×768 screen."""
+    subprocess.run(
+        ["xdotool", "mousemove", "512", "384", "click", "1"],
+        check=True
+    )
+    return "Clicked at center"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 4. Build & launch Gradio UI
+
 with gr.Blocks() as demo:
-    gr.Markdown("# Virtual Desktop Viewer (Updated Method)")
-    screen = gr.HTML(load_screenshot_as_html, every=2, label="Live Screenshot")
+    gr.Markdown("# Headless Remote Desktop Viewer")
+    # HTML component auto-refreshes every 2 s
+    demo.HTML(load_screenshot_html, every=2, label="Live Screen")  # :contentReference[oaicite:1]{index=1}
+    gr.Button("Click Center").click(click_center, outputs=None)
     demo.queue()
     demo.launch(share=True)
