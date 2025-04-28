@@ -4,12 +4,10 @@ from PIL import Image
 import gradio as gr
 from mss import mss
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 1. Point at the virtual display (Xvfb :99 must already be running)
+# ─── 1. Point at Xvfb display (must have Xvfb :99 running) ────────────────
 os.environ["DISPLAY"] = ":99"
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 2. Screenshot loop: save /tmp/latest_screen.png every 2 seconds
+# ─── 2. Screenshot loop: save /tmp/latest_screen.png every 2s ─────────────
 def save_screenshot():
     with mss() as sct:
         monitor = sct.monitors[1]
@@ -24,15 +22,13 @@ def screenshot_loop():
 
 threading.Thread(target=screenshot_loop, daemon=True).start()
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 3. Gradio callbacks + hidden components
-
+# ─── 3. Gradio callbacks + hidden components ───────────────────────────────
 def load_screenshot_html() -> str:
     """
     Returns an <img> tag (base64-encoded) with an onclick handler that:
       1. Computes click x,y within the image
-      2. Puts "x,y" into a hidden textbox (coord_input)
-      3. Programmatically clicks a hidden button (coord_button)
+      2. Writes "x,y" into the hidden textbox
+      3. Programmatically clicks the hidden button
     """
     path = "/tmp/latest_screen.png"
     if not os.path.exists(path):
@@ -55,8 +51,8 @@ def load_screenshot_html() -> str:
 
 def on_click_box(coord: str):
     """
-    coord is "x,y" from the hidden textbox.
-    Move & click the virtual mouse at those coords.
+    coord == "x,y" from the hidden textbox.
+    Move & click the Xvfb mouse at those coords.
     """
     try:
         x_str, y_str = coord.split(',')
@@ -66,24 +62,22 @@ def on_click_box(coord: str):
             check=True
         )
     except Exception:
-        pass  # ignore errors
+        pass  # ignore any parsing errors
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 4. Build & launch the Gradio UI
-
+# ─── 4. Build & launch Gradio UI ───────────────────────────────────────────
 with gr.Blocks() as demo:
     gr.Markdown(
-        "# Headless Remote Desktop Viewer  \n"
+        "# Headless Remote Desktop Viewer\n\n"
         "Click **anywhere** on the image below to move & click the mouse."
     )
 
-    # Live-updating screenshot with embedded JS clicks
-    screen_html = gr.HTML(load_screenshot_html, every=2, label="Live Screen")
+    # Live-updating HTML component with embedded JS click handler
+    screen_html = gr.HTML(load_screenshot_html, every=2, label="Live Screen")  # :contentReference[oaicite:0]{index=0}
 
-    # Hidden textbox to receive "x,y"
+    # Hidden textbox to receive "x,y" from JS
     coord_input = gr.Textbox(value="", visible=False, elem_id="coord_input")
 
-    # Hidden button that JS will click to trigger our Python callback
+    # Hidden button that JS clicks to trigger our Python callback
     coord_button = gr.Button(visible=False, elem_id="coord_button")
     coord_button.click(on_click_box, inputs=coord_input, outputs=None)
 
