@@ -1,38 +1,44 @@
 #!/usr/bin/env python3
-import os, io, base64, subprocess, numpy as np
-from PIL import Image
+import os, io, base64, subprocess, time
 import gradio as gr
 from mss import mss
+from PIL import Image
 
-# 1. Tell Linux to use the virtual display
+# 1. Set up environment
 os.environ["DISPLAY"] = ":99"
 
-# 2. Screenshot function that returns an <img> HTML tag
-def capture_screen_as_html():
+# 2. Screenshot function that saves to file
+def save_screenshot():
     with mss() as sct:
-        screenshot = sct.grab(sct.monitors[1])
-        img = Image.fromarray(np.array(screenshot))
-        buffer = io.BytesIO()
-        img.save(buffer, format="PNG")
-        img_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-        html = f'<img src="data:image/png;base64,{img_b64}" style="width:100%;height:auto;">'
+        monitor = sct.monitors[1]
+        sct_img = sct.grab(monitor)
+        img = Image.fromarray(sct_img.rgb)
+        img.save("/tmp/latest_screen.png")  # Save to tmp folder
+    return
+
+# 3. Gradio function that loads the latest screenshot
+def load_screenshot_as_html():
+    if not os.path.exists("/tmp/latest_screen.png"):
+        return "<p>No screenshot available yet.</p>"
+    
+    with open("/tmp/latest_screen.png", "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode("utf-8")
+        html = f'<img src="data:image/png;base64,{img_b64}" style="width:100%; height:auto;">'
         return html
 
-# 3. Function to simulate clicking the center of the screen
-def click_center():
-    subprocess.run(["xdotool", "mousemove", "512", "384", "click", "1"], check=True)
-    return "Clicked at center"
+# 4. Background task to keep saving screenshots
+def background_screenshot_loop():
+    while True:
+        save_screenshot()
+        time.sleep(2)  # Save every 2 seconds
 
-# 4. Build the Gradio Blocks UI
+# 5. Start background screenshot loop in a separate thread
+import threading
+threading.Thread(target=background_screenshot_loop, daemon=True).start()
+
+# 6. Build Gradio Interface
 with gr.Blocks() as demo:
-    gr.Markdown("# Virtual Desktop Remote View")
-    
-    # auto-refreshing screen
-    screen = gr.HTML(capture_screen_as_html, every=2, label="Live Screen")
-    
-    # button to click center
-    click_btn = gr.Button("Click Center")
-    click_btn.click(click_center, outputs=None)
-
+    gr.Markdown("# Virtual Desktop Viewer (Updated Method)")
+    screen = gr.HTML(load_screenshot_as_html, every=2, label="Live Screenshot")
     demo.queue()
     demo.launch(share=True)
