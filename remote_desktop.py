@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-import os, io, base64, subprocess, time, threading
+import os
+import time
+import threading
+import subprocess
 from PIL import Image
 import gradio as gr
 from mss import mss
@@ -23,40 +26,40 @@ def screenshot_loop():
         save_screenshot()
         time.sleep(2)
 
+# Start in background
 threading.Thread(target=screenshot_loop, daemon=True).start()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. Gradio functions
 
 def get_screenshot_pil():
-    """Return the latest screenshot as a PIL Image (for gr.Image)."""
+    """Return the latest screenshot as a PIL Image, or a placeholder if missing."""
     path = "/tmp/latest_screen.png"
     if not os.path.exists(path):
-        # Return a blank placeholder if no screenshot yet
+        # blank dark placeholder
         return Image.new("RGB", (1024, 768), color=(30, 30, 30))
     return Image.open(path)
 
 def on_click(evt: gr.SelectData):
     """
-    evt.index gives (x, y) clicked in the displayed image.
-    We send a mousemove+click to Xvfb at those coords.
+    Handle clicks on the Gradio Image.
+    evt.index == (x, y) in pixels within the image.
     """
-    click_x, click_y = evt.index
-    # Move + click
-    subprocess.run(["xdotool", "mousemove", str(click_x), str(click_y), "click", "1"])
-    return None  # no value to update
+    x, y = evt.index
+    # Move virtual mouse & click
+    subprocess.run(["xdotool", "mousemove", str(x), str(y), "click", "1"], check=True)
+    # No return value needed
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4. Build & launch Gradio UI
 
 with gr.Blocks() as demo:
-    gr.Markdown("# Headless Remote Desktop Viewer")
-    # Use gr.Image so we can capture clicks
+    gr.Markdown("# Headless Remote Desktop Viewer\n\nClick anywhere on the image to move & click the mouse.")
     screen = gr.Image(
         value=get_screenshot_pil,
-        every=2,
+        every=2,            # refresh every 2 seconds
         label="Live Screen"
     )
-    # Bind clicks on the image to our handler
     screen.select(on_click, inputs=None, outputs=None)
+    demo.queue()
     demo.launch(server_name="0.0.0.0", share=True)
